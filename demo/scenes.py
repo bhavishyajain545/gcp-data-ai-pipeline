@@ -46,7 +46,41 @@ def wsl(cmd: str) -> str:
 
 
 def bq(sql: str, fmt: str = "pretty") -> str:
-    return wsl(f"bq query --project_id={PROJECT} --location=US --use_legacy_sql=false --format={fmt} --max_rows=12 \"{sql}\" 2>&1 | grep -v '^$'")
+    # The grep also drops gcloud's credential-cache chatter: concurrent bq processes race on legacy_credentials/adc.json
+    # and one of them prints a harmless 'config-helper ... Unable to write file' error (seen in take 5).
+    return wsl(f"bq query --project_id={PROJECT} --location=US --use_legacy_sql=false --format={fmt} --max_rows=12 \"{sql}\" 2>&1 | grep -v '^$' | grep -v -e 'config-helper' -e 'legacy_credentials' -e 'adc.json'")
+
+
+async def live_terminal(demo: Demo, page, title: str, steps, type_delay: int = 5, pause: float = 0.4) -> None:
+    """Like demo.terminal, but each output is produced *while the command is on screen*.
+
+    `steps` is a list of (command, producer) where producer is a str or a zero-arg callable run in a
+    thread (bq/gcloud take 5-8 s each; the viewer sees the command, a short wait, then real output
+    instead of a blank terminal while everything is pre-computed).
+    """
+    await demo.terminal(title, [])
+    # Start every producer now, in parallel: bq's CLI start-up plus the query is 6-15 s each, and run
+    # serially the terminal sat blank for most of the narration (take 2).
+    tasks = []
+    for _, p in steps:
+        if isinstance(p, asyncio.Future):
+            tasks.append(p)
+        elif callable(p):
+            tasks.append(asyncio.create_task(asyncio.to_thread(p)))
+            await asyncio.sleep(2)  # stagger: simultaneous bq start-ups race on gcloud's credential cache
+        else:
+            tasks.append(None)
+    for (cmd, producer), task in zip(steps, tasks):
+        await page.evaluate("(c) => window.__prompt(c)", "")
+        for ch in cmd:
+            await page.evaluate("(c) => window.__type(c)", ch)
+            await asyncio.sleep(type_delay / 1000)
+        out = await task if task is not None else producer
+        await page.evaluate("(o) => window.__output(o)", out or "(no rows)")
+        await asyncio.sleep(pause)
+    # Keep the final output on screen: when the action already outlasts the narration the scene ends at once,
+    # and the last DOM change can miss the screencast entirely (take 6 lost the dead-letter rows).
+    await asyncio.sleep(2.5)
 
 
 def cdp_available() -> bool:
@@ -118,11 +152,12 @@ async def main() -> None:
     print(f"pre-computed in {time.time() - t0:.0f}s; job={job}")
 
     page = await demo.start()
-    df_tab = bq_tab = looker_tab = None
+    df_tab = bq_tab = looker_tab = looker_tab2 = None
     if use_cdp and job_id:
         df_tab = await demo.new_tab(f"https://console.cloud.google.com/dataflow/jobs/{REGION}/{job_id}?project={PROJECT}")
         if LOOKER_URL:
             looker_tab = await demo.new_tab(LOOKER_URL)
+            looker_tab2 = await demo.new_tab(LOOKER_URL)  # second copy, reloaded during the burst scene (see s3/s7)
         await demo.capture(page)
 
     # ---- 1 architecture ----
@@ -144,6 +179,8 @@ async def main() -> None:
 
     # ---- 3 generator burst (live, ~150 s real time; dead air is cut) ----
     async def s3():
+        if looker_tab2 is not None:  # background reload: ~4 min before the dashboard scene
+            asyncio.ensure_future(looker_tab2.reload(wait_until="commit", timeout=120000))
         await demo.terminal("Event generator: incident burst", [])
         cmd = f"python generator/publish_events.py --project {PROJECT} --rate 20 --burst-after 30 --burst-seconds 90 --duration 150"
         await page.evaluate("() => window.__prompt('')")
@@ -166,6 +203,16 @@ async def main() -> None:
         proc.wait()
     await demo.scene("Incident burst", NARRATION["burst"], s3, hold=1.0)
 
+    # ---- scene 5 queries (started during scene 4, see below) ----
+    bq_jobs: dict = {}
+
+    def s5_queries():
+        counts = lambda: bq(f"SELECT 'raw_events' AS t, COUNT(*) n FROM \\`{PROJECT}.{DATASET}.raw_events\\` UNION ALL SELECT 'service_metrics_1m', COUNT(*) FROM \\`{PROJECT}.{DATASET}.service_metrics_1m\\` UNION ALL SELECT 'dead_letter', COUNT(*) FROM \\`{PROJECT}.{DATASET}.dead_letter\\`")
+        spike = lambda: bq(f"SELECT FORMAT_TIMESTAMP('%H:%M', window_start) AS minute, service, events, ROUND(error_rate*100,1) AS err_pct, p95_latency_ms FROM \\`{PROJECT}.{DATASET}.service_metrics_1m\\` WHERE service='checkout' AND window_start >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 15 MINUTE) ORDER BY window_start DESC LIMIT 10")
+        others = lambda: bq(f"SELECT service, ROUND(AVG(error_rate)*100,1) AS avg_err_pct, MAX(p95_latency_ms) AS max_p95 FROM \\`{PROJECT}.{DATASET}.service_metrics_1m\\` WHERE window_start >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 10 MINUTE) GROUP BY service ORDER BY avg_err_pct DESC")
+        dead = lambda: bq(f"SELECT FORMAT_TIMESTAMP('%H:%M:%S', received_at) AS received, reason, SUBSTR(payload,1,60) AS payload FROM \\`{PROJECT}.{DATASET}.dead_letter\\` ORDER BY received_at DESC LIMIT 3")  # 'at' is a reserved word
+        return [counts, spike, others, dead]
+
     # ---- 4 dataflow console ----
     if df_tab is not None:
         async def s4():
@@ -174,7 +221,15 @@ async def main() -> None:
                 await df_tab.wait_for_selector("text=ParseAndValidate", timeout=60000)
             except Exception:
                 pass
-            await asyncio.sleep(2)
+            # Linger on the job graph so the burst's 1-minute windows close (watermark lag ~1-2 min) before the
+            # BigQuery scene queries them; the dead-air cut drops this wait from the final video.
+            await asyncio.sleep(40)
+            # Kick off scene 5's queries now (bq takes 6-15 s each): their results are ready when the commands are typed.
+            bq_jobs["s5"] = []
+            for fn in s5_queries():
+                bq_jobs["s5"].append(asyncio.create_task(asyncio.to_thread(fn)))
+                await asyncio.sleep(2)  # stagger (credential-cache race between concurrent bq processes)
+            await asyncio.sleep(14)
         await demo.scene("Dataflow", NARRATION["dataflow"], s4, hold=1.5)
         await demo.capture(page)
     else:
@@ -184,26 +239,43 @@ async def main() -> None:
 
     # ---- 5 bigquery results ----
     async def s5():
-        await asyncio.sleep(20)  # let the last windows close
-        counts = bq(f"SELECT 'raw_events' AS t, COUNT(*) n FROM \\`{PROJECT}.{DATASET}.raw_events\\` UNION ALL SELECT 'service_metrics_1m', COUNT(*) FROM \\`{PROJECT}.{DATASET}.service_metrics_1m\\` UNION ALL SELECT 'dead_letter', COUNT(*) FROM \\`{PROJECT}.{DATASET}.dead_letter\\`")
-        spike = bq(f"SELECT FORMAT_TIMESTAMP('%H:%M', window_start) AS minute, service, events, ROUND(error_rate*100,1) AS err_pct, p95_latency_ms FROM \\`{PROJECT}.{DATASET}.service_metrics_1m\\` WHERE service='checkout' AND window_start >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 10 MINUTE) ORDER BY window_start DESC LIMIT 8")
-        others = bq(f"SELECT service, ROUND(AVG(error_rate)*100,1) AS avg_err_pct, MAX(p95_latency_ms) AS max_p95 FROM \\`{PROJECT}.{DATASET}.service_metrics_1m\\` WHERE window_start >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 10 MINUTE) GROUP BY service ORDER BY avg_err_pct DESC")
-        dead = bq(f"SELECT FORMAT_TIMESTAMP('%H:%M:%S', received_at) AS at, reason, SUBSTR(payload,1,60) AS payload FROM \\`{PROJECT}.{DATASET}.dead_letter\\` ORDER BY received_at DESC LIMIT 3")
-        await demo.terminal("BigQuery: rows arriving, the spike, the dead letters", [
-            ("bq query 'SELECT table, COUNT(*) ...'", counts),
-            ("bq query 'SELECT minute, service, events, err_pct, p95 FROM service_metrics_1m WHERE service=\"checkout\" ...'", spike),
-            ("bq query 'SELECT service, AVG(error_rate), MAX(p95) FROM service_metrics_1m ... GROUP BY service'", others),
-            ("bq query 'SELECT received_at, reason, payload FROM dead_letter ORDER BY received_at DESC LIMIT 3'", dead),
+        # Results were pre-fetched 20 s ago during the Dataflow scene (bq_jobs["s5"]); fall back to live queries.
+        q = bq_jobs.get("s5") or s5_queries()
+        await live_terminal(demo, page, "BigQuery: rows arriving, the spike, the dead letters", [
+            ("bq query 'SELECT table, COUNT(*) ...'", q[0]),
+            ("bq query 'SELECT minute, service, events, err_pct, p95 FROM service_metrics_1m WHERE service=\"checkout\" ...'", q[1]),
+            ("bq query 'SELECT service, AVG(error_rate), MAX(p95) FROM service_metrics_1m ... GROUP BY service'", q[2]),
+            ("bq query 'SELECT received_at, reason, payload FROM dead_letter ORDER BY received_at DESC LIMIT 3'", q[3]),
         ], type_delay=5, pause=0.5)
     await demo.scene("BigQuery", NARRATION["bigquery"], s5, hold=1.5)
 
     # ---- 6 gemini ----
+    async def looker_ready(tab) -> bool:
+        """True when both chart tiles have rendered (each chart lives in a blob: iframe) and no tile errored."""
+        try:
+            if "System Error" in await tab.evaluate("() => document.body.innerText"):
+                return False
+            line = bar = False
+            for fr in tab.frames:
+                if not fr.url.startswith("blob:"):
+                    continue
+                try:
+                    t = await fr.evaluate("() => document.body.innerText")
+                except Exception:
+                    continue
+                line = line or ("checkout" in t and "payments" in t)
+                bar = bar or ("occurrences" in t)
+            return line and bar
+        except Exception:
+            return False
+
     async def s6():
-        root_causes = bq(f"SELECT root_cause, COUNT(*) AS distinct_errors, SUM(occurrences) AS occurrences FROM \\`{PROJECT}.{DATASET}.error_root_cause\\` GROUP BY 1 ORDER BY 3 DESC")
-        sample = bq(f"SELECT root_cause, SUBSTR(error_msg,1,70) AS error_msg, occurrences FROM \\`{PROJECT}.{DATASET}.error_root_cause\\` ORDER BY occurrences DESC LIMIT 6")
-        note = bq(f"SELECT service, events, errors, summary FROM \\`{PROJECT}.{DATASET}.daily_incident_summary\\` WHERE day = CURRENT_DATE() ORDER BY errors DESC LIMIT 2")
-        await demo.terminal("Gemini in BigQuery: ML.GENERATE_TEXT over a remote model", [
-            ("bq query \"CREATE MODEL IF NOT EXISTS incidents.gemini REMOTE WITH CONNECTION \\`US.vertex-ai\\` OPTIONS (ENDPOINT='gemini-3.8-flash')\"", "Model incidents.gemini already exists."),
+        model = lambda: wsl(f"bq show --project_id={PROJECT} --model --format=prettyjson {DATASET}.gemini | grep -E '\"(endpoint|connection)\"' | tr -d ' ,'")
+        root_causes = lambda: bq(f"SELECT root_cause, COUNT(*) AS distinct_errors, SUM(occurrences) AS occurrences FROM \\`{PROJECT}.{DATASET}.error_root_cause\\` GROUP BY 1 ORDER BY 3 DESC")
+        sample = lambda: bq(f"SELECT root_cause, SUBSTR(error_msg,1,70) AS error_msg, occurrences FROM \\`{PROJECT}.{DATASET}.error_root_cause\\` ORDER BY occurrences DESC LIMIT 6")
+        note = lambda: bq(f"SELECT service, events, errors, SUBSTR(summary,1,150) AS summary FROM \\`{PROJECT}.{DATASET}.daily_incident_summary\\` WHERE day = CURRENT_DATE() ORDER BY errors DESC LIMIT 2")
+        await live_terminal(demo, page, "Gemini in BigQuery: ML.GENERATE_TEXT over a remote model", [
+            (f"bq show --model {DATASET}.gemini   # from: CREATE MODEL ... REMOTE WITH CONNECTION \\`US.vertex-ai\\` OPTIONS (ENDPOINT='gemini-3.8-flash')", model),
             ("bq query 'SELECT root_cause, COUNT(*), SUM(occurrences) FROM error_root_cause GROUP BY 1 ORDER BY 3 DESC'", root_causes),
             ("bq query 'SELECT root_cause, error_msg, occurrences FROM error_root_cause ORDER BY occurrences DESC LIMIT 6'", sample),
             ("bq query 'SELECT service, events, errors, summary FROM daily_incident_summary WHERE day = CURRENT_DATE() ORDER BY errors DESC LIMIT 2'", note),
@@ -213,15 +285,33 @@ async def main() -> None:
     # ---- 7 dashboard (optional) ----
     if looker_tab is not None:
         async def s7():
-            await demo.capture(looker_tab)
+            # Two copies of the dashboard were loaded (start-up, and a reload ~4 min ago during the burst scene):
+            # Looker takes 2+ minutes to render the tiles, and a tile left idle for long can show "System Error".
+            # Show whichever copy has fully rendered; wait up to 30 s for one.
+            chosen = None
+            for _ in range(15):
+                for tab in (looker_tab, looker_tab2):
+                    if tab is not None and await looker_ready(tab):
+                        chosen = tab
+                        break
+                if chosen is not None:
+                    break
+                await asyncio.sleep(2)
+            print("  looker tab:", "ready" if chosen is not None else "NOT ready (showing primary)")
+            chosen = chosen or looker_tab
+            try:
+                await chosen.get_by_text("Dismiss", exact=True).first.click(timeout=1500)
+            except Exception:
+                pass
+            await demo.capture(chosen)
             await asyncio.sleep(3)
         await demo.scene("Dashboard", NARRATION["dashboard"], s7, hold=2.0)
         await demo.capture(page)
 
     # ---- 8 wrap ----
     async def s8():
-        await demo.terminal("Cost control + cleanup", [
-            (f"gcloud dataflow jobs list --region {REGION} --status active --format='table(name,state,type)'", wsl(f"gcloud dataflow jobs list --region {REGION} --project {PROJECT} --status active --format='table(name,state,type)'")),
+        await live_terminal(demo, page, "Cost control + cleanup", [
+            (f"gcloud dataflow jobs list --region {REGION} --status active --format='table(name,state,type)'", lambda: wsl(f"gcloud dataflow jobs list --region {REGION} --project {PROJECT} --status active --format='table(name,state,type)'")),
             ("./deploy.sh stop        # drain the streaming job after the demo", "Draining incident-stream-... (Streaming Engine, 1 worker)"),
             ("./deploy.sh destroy     # terraform destroy", "removes topics, bucket, dataset, connection, SA, scheduled query"),
         ], type_delay=8, pause=0.5)

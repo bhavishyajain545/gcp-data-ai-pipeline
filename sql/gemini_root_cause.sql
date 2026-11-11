@@ -34,7 +34,9 @@ FROM ML.GENERATE_TEXT(
       ) AS prompt
     FROM distinct_errors
   ),
-  STRUCT(0.0 AS temperature, 16 AS max_output_tokens, TRUE AS flatten_json_output)
+  -- Gemini 3.x reasons before it answers and the thinking tokens count against this cap,
+  -- so a tiny cap (16) returns NULL for some rows. 256 is plenty for a one-word answer.
+  STRUCT(0.0 AS temperature, 256 AS max_output_tokens, TRUE AS flatten_json_output)
 );
 
 -- 3. One-paragraph incident summary per service for yesterday and today.
@@ -68,5 +70,5 @@ FROM ML.GENERATE_TEXT(
       ) AS prompt
     FROM per_service
   ),
-  STRUCT(0.2 AS temperature, 200 AS max_output_tokens, TRUE AS flatten_json_output)
+  STRUCT(0.2 AS temperature, 1024 AS max_output_tokens, TRUE AS flatten_json_output)
 );

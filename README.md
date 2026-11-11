@@ -17,7 +17,7 @@ An incident and log analytics pipeline on Google Cloud: a Python generator publi
 | Batch | historical CSV from GCS through the **same** `ParseEvent` transform → `raw_events` / `dead_letter` | `pipeline/batch_backfill.py` (Dataflow batch) |
 | ELT | `daily_service_summary` MERGE (events, errors, error rate, p95, top error, regions) | `sql/elt_daily_summary.sql` as a BigQuery scheduled query (03:00 UTC) |
 | AI | remote model `gemini` on the `vertex-ai` connection; `ML.GENERATE_TEXT` root-cause category per distinct error (LIMIT 200), 3-sentence daily note per service; stretch: `ML.GENERATE_EMBEDDING` + `VECTOR_SEARCH` | `sql/gemini_root_cause.sql`, `sql/vector_search.sql` |
-| Visualize | error rate and p95 over time, top root causes, Gemini daily notes | Looker Studio on BigQuery views |
+| Visualize | error rate and p95 over time, top root causes, Gemini daily notes | Looker Studio on BigQuery views ([live report](https://lookerstudio.google.com/reporting/c3b19a12-5869-40df-8020-ac75333de2d5)) |
 
 ## Architecture
 
@@ -84,6 +84,7 @@ Dataflow streaming is the only meaningful cost (~₹400-650/day if left running)
 - **Dead-letter design at two levels:** Pub/Sub redelivery exhaustion → DLQ topic (transport problems); schema/validation failures → BigQuery `dead_letter` with the reason (data problems), queryable next to the good rows.
 - **Partitioning + clustering:** day partitions on `ts` bound every query's scan; clustering by service/severity makes the dashboard and the Gemini prompt queries cheap.
 - **Bringing Gemini to the data:** `ML.GENERATE_TEXT` in SQL avoids an export/ETL hop; cost is controlled by deduplicating error messages and limiting rows.
+- **Thinking models and token caps:** Gemini 3.x reasons before it answers and those tokens count against `max_output_tokens`; a 16-token cap silently returned NULL for a few rows (surfaced as `unknown`). 256 for the one-word classifier and 1024 for the 3-sentence note fixed it.
 - **Storage Write API:** exactly-once semantics for streaming inserts, no per-row streaming insert charge.
 
 ## How I built this

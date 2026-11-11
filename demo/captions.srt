@@ -1,0 +1,103 @@
+1
+00:00:00,300 --> 00:00:04,096
+This project is an incident analytics pipeline on Google Cloud.
+
+2
+00:00:04,096 --> 00:00:09,941
+Application events stream through Pub/Sub into a Dataflow job written with Apache Beam in Python.
+
+3
+00:00:09,941 --> 00:00:22,594
+The job validates every record, writes clean rows to BigQuery with the Storage Write API, sends malformed records to a dead-letter table, and computes one-minute error rates and latency percentiles per service.
+
+4
+00:00:22,594 --> 00:00:35,368
+A batch job backfills historical CSV through the same code, a scheduled query builds daily summaries, and Gemini, called from SQL through a BigQuery remote model, classifies root causes and writes incident notes.
+
+5
+00:00:35,368 --> 00:00:37,236
+Terraform provisions all of it.
+
+6
+00:00:38,887 --> 00:00:40,525
+The infrastructure first.
+
+7
+00:00:40,525 --> 00:01:00,040
+Terraform created the Pub/Sub topic with a dead-letter policy, the pipeline bucket, the BigQuery dataset with four partitioned tables, the cloud resource connection that lets BigQuery call Vertex AI, a dedicated Dataflow worker service account with just the roles it needs, and the scheduled query.
+
+8
+00:01:00,040 --> 00:01:05,671
+No service account keys anywhere; the pipeline authenticates with attached identities.
+
+9
+00:01:11,905 --> 00:01:12,876
+Now the incident.
+
+10
+00:01:12,876 --> 00:01:26,406
+The generator publishes about twenty events per second with a realistic mix, and after a minute it degrades one service, checkout: a third of its requests fail, mostly with database connection errors, and latency jumps five to ten times.
+
+11
+00:01:26,406 --> 00:01:31,201
+One percent of messages are deliberately malformed to exercise the dead-letter path.
+
+12
+00:01:37,424 --> 00:01:48,210
+In the Dataflow console the streaming job shows the Beam graph: read from Pub/Sub, parse and validate with two outputs, the BigQuery writers, and the windowed aggregation branch.
+
+13
+00:01:48,210 --> 00:01:54,632
+It runs on one worker with Streaming Engine, so the state lives in the service and the worker stays small.
+
+14
+00:02:01,430 --> 00:02:03,112
+The data lands within seconds.
+
+15
+00:02:03,112 --> 00:02:09,224
+Raw events are partitioned by day and clustered by service and severity, so queries scan only what they need.
+
+16
+00:02:09,224 --> 00:02:17,804
+The one-minute metrics table makes the incident obvious: checkout's error rate climbs from two percent to over thirty while the other services stay flat.
+
+17
+00:02:17,804 --> 00:02:25,598
+And the dead-letter table holds the malformed messages with the exact validation error, so bad data is visible instead of silently dropped.
+
+18
+00:02:27,553 --> 00:02:29,346
+Then Gemini, inside BigQuery.
+
+19
+00:02:29,346 --> 00:02:33,796
+A remote model points at a Gemini Flash endpoint through the connection.
+
+20
+00:02:33,796 --> 00:02:45,108
+One query deduplicates the error messages and asks the model for a single root-cause category each; the result is a table we can group by, and the incident's database errors dominate.
+
+21
+00:02:45,108 --> 00:02:52,278
+A second query writes a three-sentence incident note per service and day, with the most likely cause and one action.
+
+22
+00:02:52,278 --> 00:02:57,841
+Costs stay bounded because we classify distinct messages, not rows, and cap the row count.
+
+23
+00:03:00,277 --> 00:03:11,845
+The Looker Studio dashboard reads three thin views: error rate and p95 latency over time, where the spike is, the top root causes from Gemini, and the daily notes.
+
+24
+00:03:14,776 --> 00:03:25,867
+The streaming job is the only meaningful cost, so it runs for the demo and is drained afterwards; BigQuery and Pub/Sub stay in the free tier, and the Gemini calls are limited by design.
+
+25
+00:03:25,867 --> 00:03:29,585
+Code, SQL, Terraform and the Beam tests are in the repository.
+
+26
+00:03:29,585 --> 00:03:30,784
+Thanks for watching.

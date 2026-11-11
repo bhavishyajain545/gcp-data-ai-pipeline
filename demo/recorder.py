@@ -118,8 +118,14 @@ class Demo:
     async def _start_screencast(self, cdp) -> None:
         w, h = self.size
 
+        t0_wall = time.time() - (time.monotonic() - self._t0)  # wall-clock instant of the timeline's t=0
+
         def on_frame(params, _cdp=cdp):
-            self._frames.append((time.monotonic() - self._t0, params["data"]))
+            # Use Chrome's capture timestamp, not the receive time: a blocking subprocess in a scene
+            # (bq, gcloud) delays event delivery and would otherwise stamp the frame seconds late.
+            ts = params.get("metadata", {}).get("timestamp")
+            rel = (ts - t0_wall) if ts else (time.monotonic() - self._t0)
+            self._frames.append((max(rel, 0.0), params["data"]))
             asyncio.ensure_future(_cdp.send("Page.screencastFrameAck", {"sessionId": params["sessionId"]}))
 
         cdp.on("Page.screencastFrame", on_frame)
@@ -243,7 +249,7 @@ class Demo:
             "-filter_complex", ";".join(filters),
             "-map", "0:v", "-map", "[aout]",
             "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-r", "30",
-            "-c:a", "aac", "-b:a", "160k", "-shortest", str(out),
+            "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-shortest", str(out),  # 48 kHz stereo: the TTS wavs are 24 kHz mono, which some players mishandle
         ]
         subprocess.run(cmd, check=True, capture_output=True)
         self._write_captions(name)
@@ -265,6 +271,7 @@ class Demo:
         w, h = self.size
         # Anchor the timeline at t=0 so narration offsets stay aligned even if the
         # first screencast frame arrives late (blank pages emit no frames).
+        self._frames.sort(key=lambda f: f[0])  # Chrome timestamps: never let a late delivery produce a negative duration
         if self._frames and self._frames[0][0] > 0.05:
             self._frames.insert(0, (0.0, self._frames[0][1]))
         end = self._cut_dead_air(end)

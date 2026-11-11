@@ -187,9 +187,9 @@ FROM ML.GENERATE_TEXT(
   (SELECT error_msg, occurrences,
           CONCAT('Classify this production error into exactly one of: DB, network, deploy, config, code, capacity, external. Reply with the word only.\n\nError: ', error_msg) AS prompt
    FROM distinct_errors),            -- top 200 distinct messages by occurrences
-  STRUCT(0.0 AS temperature, 16 AS max_output_tokens, TRUE AS flatten_json_output));</code></pre>
+  STRUCT(0.0 AS temperature, 256 AS max_output_tokens, TRUE AS flatten_json_output));</code></pre>
   <div class="grid">
-    <div class="card"><b>Cost control</b><p>Deduplicate first (distinct messages, not rows), cap with <code>LIMIT</code>, keep <code>max_output_tokens</code> tiny for classification, and run it once a day.</p></div>
+    <div class="card"><b>Cost control</b><p>Deduplicate first (distinct messages, not rows), cap with <code>LIMIT</code>, and run it once a day. Note: Gemini 3.x reasons before answering and those tokens count against <code>max_output_tokens</code>, so a 16-token cap returned NULL for some rows; 256 is the working floor for a one-word answer.</p></div>
     <div class="card"><b>Deterministic classes</b><p><code>temperature 0</code> and an explicit closed list make the category usable as a dimension in the dashboard.</p></div>
     <div class="card"><b>Connection identity</b><p>The connection's service account is the only principal that can call Vertex AI from BigQuery; it has exactly <code>roles/aiplatform.user</code>.</p></div>
     <div class="card"><b>Stretch: similar incidents</b><p><code>ML.GENERATE_EMBEDDING</code> over error messages and <code>VECTOR_SEARCH</code> to find the five closest past incidents to a new one.</p></div>
@@ -198,7 +198,7 @@ FROM ML.GENERATE_TEXT(
 
 <section id="dashboard"><div class="wrap">
   <h2>Dashboard</h2>
-  <p class="sub">Looker Studio over three thin views so the report never scans <code>raw_events</code>.</p>
+  <p class="sub">Looker Studio over three thin views so the report never scans <code>raw_events</code>. Live report: <a href="https://lookerstudio.google.com/reporting/c3b19a12-5869-40df-8020-ac75333de2d5">Incident Analytics</a> (unlisted link, viewer access).</p>
   <div class="grid">
     <div class="card"><b>v_error_rate_1m</b><p>Time series of error rate and p95 per service for the last 7 days: the incident burst is the obvious spike.</p></div>
     <div class="card"><b>v_top_root_causes</b><p>Gemini categories by occurrences with example messages, as a bar chart.</p></div>
