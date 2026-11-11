@@ -224,6 +224,7 @@ FROM ML.GENERATE_TEXT(
 
 <section id="deploy"><div class="wrap">
   <h2>Run it</h2>
+  <p class="sub">Full from-zero runbook (org-policy overrides, Java for Beam, Looker Studio steps, teardown): <a href="https://github.com/bhavishyajain545/gcp-data-ai-pipeline/blob/main/REBUILD.md">REBUILD.md</a>.</p>
   <ol class="steps">
     <li><b>Infra</b><code>./deploy.sh infra</code>: Pub/Sub, GCS, BigQuery dataset/tables, the Vertex AI connection, the worker SA and the scheduled query.</li>
     <li><b>Stream</b><code>./deploy.sh stream</code> launches the Dataflow job (Streaming Engine, 1-2 workers); it is Running after ~3 minutes.</li>

@@ -7,6 +7,7 @@ An incident and log analytics pipeline on Google Cloud: a Python generator publi
 - Demo video: [`demo/demo.mp4`](demo/demo.mp4) · captions [`demo/captions.srt`](demo/captions.srt) · transcript [`demo/transcript.md`](demo/transcript.md)
 - Docs site: [`docs/index.html`](docs/index.html)
 - Project: `bj-data-ai-pipeline` · region `us-central1` · BigQuery location `US`
+- **Rebuild from scratch, step by step (incl. org-policy overrides, Java for Beam, Looker Studio, teardown): [`REBUILD.md`](REBUILD.md)**
 
 ## Pipeline
 
