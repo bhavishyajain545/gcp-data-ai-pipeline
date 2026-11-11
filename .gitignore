@@ -1,0 +1,28 @@
+# secrets / keys
+*.json
+!package*.json
+*.pem
+.env
+*.tfvars
+!*.tfvars.example
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# python
+__pycache__/
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# generated data
+data/*.csv
+
+# demo recording scratch (keep demo.mp4, captions.srt, transcript.md)
+demo/_chrome-profile/
+demo/_video/
+demo/tts/
+demo/scenes.json

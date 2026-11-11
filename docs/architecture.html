@@ -1,0 +1,82 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Architecture: Incident analytics pipeline</title>
+<style>
+  body{margin:0;background:#ffffff;font-family:Inter,Segoe UI,Arial,sans-serif;color:#1f2933}
+  .canvas{width:1400px;height:800px;position:relative;padding:36px;box-sizing:border-box}
+  h1{font-size:26px;margin:0 0 4px}
+  .sub{color:#5f6b7a;font-size:15px;margin-bottom:24px}
+  .box{position:absolute;border-radius:12px;padding:12px 14px;box-sizing:border-box;border:2px solid;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.06)}
+  .box b{display:block;font-size:15px;margin-bottom:3px}
+  .box span{font-size:12.5px;color:#5f6b7a;line-height:1.35}
+  .src{border-color:#5f6b7a}
+  .stream{border-color:#4285f4;background:#eef4ff}
+  .bq{border-color:#0f9d58;background:#ebf8f0}
+  .ai{border-color:#9334e6;background:#f6efff}
+  .viz{border-color:#f4b400;background:#fff8e1}
+  .zone{position:absolute;border:2px dashed #c3cbd5;border-radius:16px}
+  .zone label{position:absolute;top:-12px;left:16px;background:#fff;padding:0 8px;font-size:13px;color:#5f6b7a;font-weight:600}
+  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .lbl{font-size:12px;fill:#5f6b7a}
+</style></head>
+<body><div class="canvas">
+  <h1>Incident analytics: streaming + batch into BigQuery, Gemini in SQL</h1>
+  <div class="sub">Project bj-data-ai-pipeline · Pub/Sub → Dataflow (Beam, Python) → BigQuery → Gemini remote model → Looker Studio · Terraform</div>
+
+  <div class="zone" style="left:300px;top:110px;width:1060px;height:650px"><label>Google Cloud project: bj-data-ai-pipeline</label></div>
+  <div class="zone" style="left:620px;top:150px;width:440px;height:580px;border-color:#9bd3b0"><label style="color:#0f9d58">BigQuery dataset "incidents" (US)</label></div>
+
+  <!-- sources -->
+  <div class="box src" style="left:40px;top:200px;width:230px"><b>Event generator (Python)</b><span>~20 events/s: service, severity,<br>latency_ms, status, error_msg, region<br>incident-burst mode · 1% malformed</span></div>
+  <div class="box src" style="left:40px;top:480px;width:230px"><b>Historical CSV export</b><span>3 days × 20k rows<br>uploaded to GCS historical/</span></div>
+
+  <!-- ingest / process -->
+  <div class="box stream" style="left:330px;top:190px;width:250px"><b>Pub/Sub topic "events"</b><span>subscription events-dataflow<br>dead-letter topic after 5 attempts</span></div>
+  <div class="box stream" style="left:330px;top:310px;width:250px"><b>Dataflow streaming (Beam)</b><span>parse + validate → tagged outputs<br>FixedWindows(60 s): count, errors, p50/p95<br>Storage Write API · Streaming Engine<br>1 worker · runs as sa-dataflow-worker</span></div>
+  <div class="box stream" style="left:330px;top:480px;width:250px"><b>Dataflow batch (Beam)</b><span>ReadFromText CSV → same ParseEvent<br>→ raw_events / dead_letter</span></div>
+  <div class="box src" style="left:330px;top:610px;width:250px"><b>GCS bucket</b><span>temp/ · staging/ (3-day lifecycle)<br>historical/*.csv</span></div>
+
+  <!-- bigquery -->
+  <div class="box bq" style="left:640px;top:190px;width:190px"><b>raw_events</b><span>partition DAY(ts)<br>cluster service, severity</span></div>
+  <div class="box bq" style="left:850px;top:190px;width:190px"><b>service_metrics_1m</b><span>per-minute error rate,<br>p50/p95 per service</span></div>
+  <div class="box bq" style="left:640px;top:310px;width:190px"><b>dead_letter</b><span>reason + payload</span></div>
+  <div class="box bq" style="left:850px;top:310px;width:190px"><b>daily_service_summary</b><span>scheduled MERGE 03:00 UTC<br>sql/elt_daily_summary.sql</span></div>
+  <div class="box ai" style="left:640px;top:440px;width:400px"><b>Remote model "gemini" (connection vertex-ai)</b><span>ML.GENERATE_TEXT: error_msg → root cause {DB, network, deploy, config, code, capacity, external}<br>ML.GENERATE_TEXT: 3-sentence daily note per service<br>stretch: ML.GENERATE_EMBEDDING + VECTOR_SEARCH</span></div>
+  <div class="box bq" style="left:640px;top:610px;width:400px"><b>Views for the dashboard</b><span>v_error_rate_1m · v_top_root_causes · v_daily_summary</span></div>
+
+  <!-- right -->
+  <div class="box src" style="left:1090px;top:190px;width:250px"><b>Terraform</b><span>topics, subscriptions, DLQ, bucket,<br>dataset + 4 tables, BQ↔Vertex connection,<br>Dataflow SA + roles, scheduled query</span></div>
+  <div class="box ai" style="left:1090px;top:440px;width:250px"><b>Vertex AI</b><span>Gemini Flash endpoint<br>connection SA = roles/aiplatform.user</span></div>
+  <div class="box viz" style="left:1090px;top:610px;width:250px"><b>Looker Studio</b><span>error rate + p95 over time,<br>top root causes, Gemini daily note</span></div>
+
+  <svg>
+    <defs><marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5f6b7a"/></marker></defs>
+    <g stroke="#5f6b7a" stroke-width="2" fill="none" marker-end="url(#a)">
+      <path d="M270,240 L328,240"/>
+      <path d="M455,262 L455,308"/>
+      <path d="M580,345 C605,345 610,235 638,235"/>
+      <path d="M580,330 C600,330 600,176 700,176 L915,176 C935,176 945,180 945,188"/>
+      <path d="M580,380 C605,380 610,345 638,345"/>
+      <path d="M270,520 L328,520"/>
+      <path d="M580,505 C612,505 606,262 638,252"/>
+      <path d="M580,530 C615,530 612,372 638,362"/>
+      <path d="M830,245 C842,245 842,330 848,340"/>
+      <path d="M640,250 C612,250 612,480 638,480"/>
+      <path d="M1040,480 L1088,480"/>
+      <path d="M840,560 L840,608"/>
+      <path d="M1040,650 L1088,650"/>
+      <path d="M455,608 L455,572" stroke-dasharray="5 4"/>
+    </g>
+    <text class="lbl" x="276" y="232">publish</text>
+    <text class="lbl" x="462" y="290">pull</text>
+    <text class="lbl" x="700" y="170">1-min aggregates</text>
+    <text class="lbl" x="586" y="326">clean rows</text>
+    <text class="lbl" x="586" y="396">malformed</text>
+    <text class="lbl" x="276" y="512">bq load path</text>
+    <text class="lbl" x="848" y="300">daily ELT</text>
+    <text class="lbl" x="560" y="440">prompts (LIMIT)</text>
+    <text class="lbl" x="1046" y="472">REST</text>
+    <text class="lbl" x="848" y="590">SELECT</text>
+    <text class="lbl" x="1046" y="642">connect</text>
+    <text class="lbl" x="462" y="596">temp/staging</text>
+  </svg>
+</div></body></html>

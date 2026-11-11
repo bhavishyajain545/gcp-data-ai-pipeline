@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Incident Analytics Pipeline</title>
+<meta name="description" content="Streaming + batch incident analytics on Google Cloud: Pub/Sub, Dataflow (Apache Beam), BigQuery, Gemini in BigQuery via a remote model, Looker Studio, Terraform.">
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1b2430; --muted:#5b6775; --line:#dfe4ea;
+    --blue:#1a73e8; --blue-soft:#e8f0fe; --purple:#7b3fe4; --purple-soft:#f1ebfd;
+    --green:#188038; --green-soft:#e6f4ea; --amber:#b06000; --amber-soft:#fef3e0; --red:#c5221f;
+    --code:#0f1419; --code-ink:#e6edf3; --radius:14px;
+  }
+  :root:not([data-theme="light"]) { color-scheme: light dark; }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+    --bg:#0f1317; --panel:#171c22; --ink:#e7ecf2; --muted:#9aa7b4; --line:#2a323c;
+    --blue:#8ab4f8; --blue-soft:#15233a; --purple:#c58af9; --purple-soft:#261a3d;
+    --green:#81c995; --green-soft:#12301b; --amber:#fdd663; --amber-soft:#3a2d0b; --red:#f28b82;
+    --code:#0b0f14; --code-ink:#d7dde5;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0f1317; --panel:#171c22; --ink:#e7ecf2; --muted:#9aa7b4; --line:#2a323c;
+    --blue:#8ab4f8; --blue-soft:#15233a; --purple:#c58af9; --purple-soft:#261a3d;
+    --green:#81c995; --green-soft:#12301b; --amber:#fdd663; --amber-soft:#3a2d0b; --red:#f28b82;
+    --code:#0b0f14; --code-ink:#d7dde5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Inter,"Segoe UI",system-ui,-apple-system,Roboto,sans-serif}
+  a{color:var(--blue)}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 16px}
+  header{padding:56px 0 28px}
+  .eyebrow{color:var(--muted);font-size:14px;letter-spacing:.04em;text-transform:uppercase;margin:0 0 8px}
+  h1{font-size:clamp(28px,4.5vw,44px);line-height:1.15;margin:0 0 14px}
+  .lede{font-size:18px;color:var(--muted);max-width:760px;margin:0 0 20px}
+  .pills{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}
+  .pill{font-size:13px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--panel)}
+  .cta{display:inline-flex;gap:10px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:10px 16px;border-radius:10px;background:var(--blue);color:#fff;text-decoration:none;font-weight:600}
+  .btn.ghost{background:transparent;color:var(--blue);border:1px solid var(--blue)}
+  nav.toc{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);z-index:5}
+  nav.toc .wrap{display:flex;gap:18px;overflow-x:auto;padding:10px 16px;font-size:14px;white-space:nowrap}
+  nav.toc a{text-decoration:none;color:var(--muted)} nav.toc a:hover{color:var(--ink)}
+  section{padding:40px 0;border-top:1px solid var(--line)}
+  h2{font-size:26px;margin:0 0 6px} .sub{color:var(--muted);margin:0 0 22px}
+  h3{font-size:18px;margin:26px 0 8px}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .card,.grid>*{min-width:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .card b{display:block;margin-bottom:6px}
+  .card p{margin:0;color:var(--muted);font-size:15px}
+  figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px;overflow:auto}
+  figure img{display:block;width:100%;height:auto;border-radius:8px}
+  figcaption{font-size:14px;color:var(--muted);padding:8px 4px 0}
+  pre{background:var(--code);color:var(--code-ink);padding:14px 16px;border-radius:10px;overflow:auto;font:13.5px/1.55 Consolas,"Cascadia Mono",ui-monospace,monospace}
+  code{font-family:Consolas,"Cascadia Mono",ui-monospace,monospace;font-size:.93em;background:var(--blue-soft);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
+  pre code{background:none;padding:0}
+  .tbl{overflow-x:auto;border-radius:var(--radius)}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:15px}
+  th{background:var(--blue-soft);font-weight:600}
+  tr:last-child td{border-bottom:0}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:0;display:grid;gap:12px}
+  .steps li{position:relative;padding:14px 16px 14px 58px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+  .steps li::before{counter-increment:s;content:counter(s);position:absolute;left:16px;top:14px;width:30px;height:30px;border-radius:50%;background:var(--blue);color:#fff;display:grid;place-items:center;font-weight:700;font-size:14px}
+  .steps li b{display:block;margin-bottom:4px}
+  .tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:6px;margin-right:6px;font-weight:600}
+  .t-run{background:var(--blue-soft);color:var(--blue)} .t-ai{background:var(--purple-soft);color:var(--purple)} .t-data{background:var(--green-soft);color:var(--green)} .t-ops{background:var(--amber-soft);color:var(--amber)}
+  .video{aspect-ratio:16/9;width:100%;border-radius:var(--radius);background:#000;border:1px solid var(--line)}
+  footer{padding:40px 0;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}
+  svg text{font-family:Inter,"Segoe UI",system-ui,sans-serif}
+  .flow{width:100%;height:auto}
+  @media (max-width:640px){ th,td{font-size:14px} header{padding-top:36px} }
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <p class="eyebrow">Google Cloud portfolio · Project 3 of 3</p>
+  <h1>Streaming + batch incident analytics with Gemini in BigQuery</h1>
+  <p class="lede">Application events stream through Pub/Sub into a Dataflow pipeline that validates, windows and lands them in BigQuery; a batch job backfills history; scheduled SQL builds daily summaries; and Gemini, called from SQL through a BigQuery remote model, classifies root causes and writes incident notes. Looker Studio sits on top. Terraform builds all of it.</p>
+  <div class="pills">
+    <span class="pill">Pub/Sub</span><span class="pill">Dataflow · Apache Beam 2.77 (Python)</span><span class="pill">BigQuery</span><span class="pill">Storage Write API</span><span class="pill">BigQuery ML remote model</span><span class="pill">Gemini Flash</span><span class="pill">Scheduled queries</span><span class="pill">Looker Studio</span><span class="pill">Terraform</span>
+  </div>
+  <div class="cta">
+    <a class="btn" href="#demo">Watch the demo</a>
+    <a class="btn ghost" href="https://github.com/bhavishyajain545/gcp-data-ai-pipeline">Source on GitHub</a>
+  </div>
+</header>
+
+<nav class="toc"><div class="wrap">
+  <a href="#demo">Demo</a><a href="#architecture">Architecture</a><a href="#streaming">Streaming job</a><a href="#tables">Tables</a><a href="#gemini">Gemini in SQL</a><a href="#dashboard">Dashboard</a><a href="#security">Security + cost</a><a href="#deploy">Run it</a><a href="#lessons">Lessons</a>
+</div></nav>
+
+<section id="demo"><div class="wrap">
+  <h2>Demo</h2>
+  <p class="sub">Narrated walkthrough: event burst → Dataflow job graph → rows arriving in BigQuery → 1-minute error-rate spike → Gemini root causes and daily notes → dashboard.</p>
+  <video class="video" controls preload="metadata" poster="architecture.png">
+    <source src="https://github.com/bhavishyajain545/gcp-data-ai-pipeline/raw/main/demo/demo.mp4" type="video/mp4">
+    <track kind="captions" src="https://github.com/bhavishyajain545/gcp-data-ai-pipeline/raw/main/demo/captions.srt" srclang="en" label="English">
+    Your browser does not support the video tag. <a href="https://github.com/bhavishyajain545/gcp-data-ai-pipeline/raw/main/demo/demo.mp4">Download demo.mp4</a>.
+  </video>
+  <p class="sub" style="margin-top:10px">Transcript: <a href="https://github.com/bhavishyajain545/gcp-data-ai-pipeline/blob/main/demo/transcript.md">demo/transcript.md</a> · Captions: <a href="https://github.com/bhavishyajain545/gcp-data-ai-pipeline/blob/main/demo/captions.srt">demo/captions.srt</a>.</p>
+</div></section>
+
+<section id="architecture"><div class="wrap">
+  <h2>Architecture</h2>
+  <figure>
+    <img src="architecture.png" alt="Architecture: generator to Pub/Sub to Dataflow streaming to BigQuery raw_events, service_metrics_1m and dead_letter; CSV to Dataflow batch; scheduled query to daily_service_summary; BigQuery remote model to Vertex AI Gemini; Looker Studio on views">
+    <figcaption>Streaming and batch share one validation transform. Everything in the outer box is Terraform; the Gemini model and views are SQL applied by <code>deploy.sh</code>.</figcaption>
+  </figure>
+  <div class="grid" style="margin-top:16px">
+    <div class="card"><span class="tag t-run">Ingest</span><b>Pub/Sub + generator</b><p>Realistic event mix at ~20/s with an incident-burst mode and 1% malformed payloads. A dead-letter topic catches messages that fail delivery 5 times.</p></div>
+    <div class="card"><span class="tag t-run">Process</span><b>Dataflow (Apache Beam, Python)</b><p>Streaming: parse → validate → BigQuery via the Storage Write API, plus 60-second windows per service. Batch: CSV backfill through the same transform. Dedicated worker service account, Streaming Engine, 1-2 workers.</p></div>
+    <div class="card"><span class="tag t-data">Store</span><b>BigQuery</b><p>Day-partitioned, clustered tables; dead-letter table with reasons; daily summary from a scheduled MERGE; thin views for the dashboard.</p></div>
+    <div class="card"><span class="tag t-ai">AI</span><b>Gemini via remote model</b><p><code>ML.GENERATE_TEXT</code> in SQL over a cloud-resource connection: root-cause category per distinct error, 3-sentence daily note per service, optional embeddings + <code>VECTOR_SEARCH</code>.</p></div>
+  </div>
+</div></section>
+
+<section id="streaming"><div class="wrap">
+  <h2>The streaming job</h2>
+  <p class="sub">One <code>ParDo</code> with tagged outputs decides good vs bad; everything downstream is standard Beam.</p>
+  <figure>
+    <svg class="flow" viewBox="0 0 1040 230" role="img" aria-label="Beam graph: ReadFromPubSub, ParseAndValidate with ok and dead outputs, WriteRawEvents, WriteDeadLetter, KeyByService, FixedWindows 60s, GroupByKey, Aggregate, WriteMetrics1m">
+      <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6775"/></marker></defs>
+      <g fill="var(--panel)" stroke="var(--line)" stroke-width="1.5">
+        <rect x="10" y="80" width="150" height="60" rx="12"/><rect x="200" y="80" width="170" height="60" rx="12"/>
+        <rect x="430" y="10" width="160" height="60" rx="12"/><rect x="430" y="150" width="160" height="60" rx="12"/>
+        <rect x="640" y="10" width="170" height="60" rx="12"/><rect x="850" y="10" width="180" height="60" rx="12"/>
+        <rect x="640" y="150" width="170" height="60" rx="12"/><rect x="850" y="150" width="180" height="60" rx="12"/>
+      </g>
+      <g stroke="#5b6775" stroke-width="1.6" fill="none" marker-end="url(#ar)">
+        <line x1="160" y1="110" x2="198" y2="110"/>
+        <path d="M370,100 C400,100 400,40 428,40"/><path d="M370,120 C400,120 400,180 428,180"/>
+        <line x1="590" y1="40" x2="638" y2="40"/><line x1="810" y1="40" x2="848" y2="40"/>
+        <path d="M590,170 C615,170 615,120 640,120" stroke="transparent"/>
+        <line x1="590" y1="180" x2="638" y2="180"/><line x1="810" y1="180" x2="848" y2="180"/>
+      </g>
+      <g font-size="12.5" fill="currentColor" text-anchor="middle">
+        <text x="85" y="106" font-weight="600">ReadFromPubSub</text><text x="85" y="124">events-dataflow</text>
+        <text x="285" y="106" font-weight="600">ParseAndValidate</text><text x="285" y="124">ok | dead (tagged)</text>
+        <text x="510" y="36" font-weight="600">KeyByService</text><text x="510" y="54">(service, event)</text>
+        <text x="510" y="176" font-weight="600">WriteRawEvents</text><text x="510" y="194">Storage Write API</text>
+        <text x="725" y="36" font-weight="600">FixedWindows(60s)</text><text x="725" y="54">late 120s · discarding</text>
+        <text x="940" y="36" font-weight="600">GroupByKey → Aggregate</text><text x="940" y="54">count, errors, p50, p95</text>
+        <text x="725" y="176" font-weight="600">WriteDeadLetter</text><text x="725" y="194">reason + payload</text>
+        <text x="940" y="176" font-weight="600">WriteMetrics1m</text><text x="940" y="194">service_metrics_1m</text>
+      </g>
+      <text class="lbl" x="385" y="70" font-size="11" fill="currentColor">ok</text><text x="385" y="160" font-size="11" fill="currentColor">dead</text>
+    </svg>
+    <figcaption>Validation rules: JSON object, ISO-8601 <code>ts</code>, non-empty <code>service</code>, severity in {DEBUG, INFO, WARN, ERROR, CRITICAL}, latency 0-600 s. Everything else is written to <code>dead_letter</code> with the exception text, never dropped.</figcaption>
+  </figure>
+  <h3>Choices</h3>
+  <div class="grid">
+    <div class="card"><b>Storage Write API</b><p>Exactly-once streaming inserts at lower cost than the legacy streaming API; the batch job uses file loads.</p></div>
+    <div class="card"><b>Fixed 60 s windows, discarding mode</b><p>Each minute's metrics are emitted once; late events (up to 120 s) produce a corrected pane instead of holding the window open.</p></div>
+    <div class="card"><b>Shared transform for batch</b><p><code>batch_backfill.py</code> imports <code>ParseEvent</code> from the streaming module, so historical data obeys the same schema rules.</p></div>
+    <div class="card"><b>Unit tests without GCP</b><p><code>test_pipeline.py</code> runs the parse and window-aggregate steps on the DirectRunner with <code>assert_that</code>.</p></div>
+  </div>
+</div></section>
+
+<section id="tables"><div class="wrap">
+  <h2>Tables</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Table</th><th>Written by</th><th>Layout</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>raw_events</code></td><td>streaming + batch</td><td>partition DAY(<code>ts</code>), cluster <code>service, severity</code></td><td>Every valid event; the source for ELT and Gemini prompts.</td></tr>
+      <tr><td><code>service_metrics_1m</code></td><td>streaming</td><td>partition DAY(<code>window_start</code>), cluster <code>service</code></td><td>Per-minute events, errors, error rate, p50/p95 latency.</td></tr>
+      <tr><td><code>dead_letter</code></td><td>streaming + batch</td><td>partition DAY(<code>received_at</code>)</td><td>Malformed records with the reason and raw payload.</td></tr>
+      <tr><td><code>daily_service_summary</code></td><td>scheduled query (03:00 UTC)</td><td>partition DAY(<code>day</code>)</td><td>Daily events, errors, error rate, p95, top error, regions (MERGE, idempotent).</td></tr>
+      <tr><td><code>error_root_cause</code></td><td><code>ML.GENERATE_TEXT</code></td><td>small</td><td>Distinct error message → category, occurrences, services.</td></tr>
+      <tr><td><code>daily_incident_summary</code></td><td><code>ML.GENERATE_TEXT</code></td><td>small</td><td>3-sentence SRE note per service per day.</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<section id="gemini"><div class="wrap">
+  <h2>Gemini in SQL</h2>
+  <p class="sub">The model lives in BigQuery as a remote model; prompts are built with SQL; results are tables.</p>
+<pre><code>CREATE MODEL IF NOT EXISTS `incidents.gemini`
+  REMOTE WITH CONNECTION `US.vertex-ai`
+  OPTIONS (ENDPOINT = 'gemini-3.8-flash');
+
+SELECT error_msg, occurrences, TRIM(ml_generate_text_llm_result) AS root_cause
+FROM ML.GENERATE_TEXT(
+  MODEL `incidents.gemini`,
+  (SELECT error_msg, occurrences,
+          CONCAT('Classify this production error into exactly one of: DB, network, deploy, config, code, capacity, external. Reply with the word only.\n\nError: ', error_msg) AS prompt
+   FROM distinct_errors),            -- top 200 distinct messages by occurrences
+  STRUCT(0.0 AS temperature, 16 AS max_output_tokens, TRUE AS flatten_json_output));</code></pre>
+  <div class="grid">
+    <div class="card"><b>Cost control</b><p>Deduplicate first (distinct messages, not rows), cap with <code>LIMIT</code>, keep <code>max_output_tokens</code> tiny for classification, and run it once a day.</p></div>
+    <div class="card"><b>Deterministic classes</b><p><code>temperature 0</code> and an explicit closed list make the category usable as a dimension in the dashboard.</p></div>
+    <div class="card"><b>Connection identity</b><p>The connection's service account is the only principal that can call Vertex AI from BigQuery; it has exactly <code>roles/aiplatform.user</code>.</p></div>
+    <div class="card"><b>Stretch: similar incidents</b><p><code>ML.GENERATE_EMBEDDING</code> over error messages and <code>VECTOR_SEARCH</code> to find the five closest past incidents to a new one.</p></div>
+  </div>
+</div></section>
+
+<section id="dashboard"><div class="wrap">
+  <h2>Dashboard</h2>
+  <p class="sub">Looker Studio over three thin views so the report never scans <code>raw_events</code>.</p>
+  <div class="grid">
+    <div class="card"><b>v_error_rate_1m</b><p>Time series of error rate and p95 per service for the last 7 days: the incident burst is the obvious spike.</p></div>
+    <div class="card"><b>v_top_root_causes</b><p>Gemini categories by occurrences with example messages, as a bar chart.</p></div>
+    <div class="card"><b>v_daily_summary</b><p>Daily numbers joined with the Gemini note, as a table.</p></div>
+  </div>
+</div></section>
+
+<section id="security"><div class="wrap">
+  <h2>Security and cost</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Item</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>Dataflow identity</td><td>Dedicated <code>sa-dataflow-worker</code> (dataflow.worker, bigquery.dataEditor/jobUser, pubsub.subscriber/viewer, objectAdmin on the one bucket); not the Compute default SA.</td></tr>
+      <tr><td>BigQuery ↔ Vertex</td><td>Cloud-resource connection whose SA has only <code>roles/aiplatform.user</code>.</td></tr>
+      <tr><td>Dataset ACL</td><td>Explicit special groups + the worker SA; the org's domain-restricted sharing rejects consumer accounts in dataset ACLs, so the provider default (creator by email) is not used.</td></tr>
+      <tr><td>Worker networking</td><td>No external IPs (<code>--no_use_public_ips</code>; the org denies <code>compute.vmExternalIpAccess</code>). Dedicated <code>dataflow-vpc</code> subnet with Private Google Access; firewall allows only worker-to-worker 12345-12346. No Cloud NAT: the pipeline needs nothing from the public internet, so the SDK image is used as-is without a <code>requirements_file</code>.</td></tr>
+      <tr><td>Keys</td><td>None. Jobs are launched with the operator's ADC; workers use the attached SA.</td></tr>
+      <tr><td>Bucket</td><td>Uniform access, public access prevention, 3-day lifecycle on temp/staging.</td></tr>
+      <tr><td>Cost</td><td>Streaming Engine + 1 worker (~₹25/hour) is the only meaningful cost; <code>./deploy.sh stop</code> drains it. BigQuery and Pub/Sub stay in the free tier at this volume; Gemini is bounded by LIMITs.</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<section id="deploy"><div class="wrap">
+  <h2>Run it</h2>
+  <ol class="steps">
+    <li><b>Infra</b><code>./deploy.sh infra</code>: Pub/Sub, GCS, BigQuery dataset/tables, the Vertex AI connection, the worker SA and the scheduled query.</li>
+    <li><b>Stream</b><code>./deploy.sh stream</code> launches the Dataflow job (Streaming Engine, 1-2 workers); it is Running after ~3 minutes.</li>
+    <li><b>Events</b><code>./deploy.sh generate</code>: 4 minutes at 20 events/s with a 90-second incident on <code>checkout</code>.</li>
+    <li><b>Backfill</b><code>./deploy.sh backfill</code>: 60k historical rows through the batch job.</li>
+    <li><b>ELT + AI + views</b><code>./deploy.sh elt</code>, <code>./deploy.sh gemini</code>, <code>./deploy.sh views</code>.</li>
+    <li><b>Dashboard</b>Looker Studio → BigQuery connector → the three views.</li>
+    <li><b>Stop</b><code>./deploy.sh stop</code> (drain) then <code>./deploy.sh destroy</code>.</li>
+  </ol>
+</div></section>
+
+<section id="lessons"><div class="wrap">
+  <h2>What I learned building it</h2>
+  <div class="grid">
+    <div class="card"><b>Dataset ACLs meet org policy</b><p>The Terraform provider adds the creating user to a new dataset's ACL. With domain-restricted sharing enforced, a gmail creator makes the create call fail; explicit <code>access</code> blocks fix it.</p></div>
+    <div class="card"><b>"Worker pool failed to start" was an org policy</b><p>The first Dataflow jobs died with <code>compute.vmExternalIpAccess violated</code>. The fix is not to loosen the policy: run workers without public IPs in a subnet with Private Google Access, and drop the PyPI <code>requirements_file</code> so no NAT is needed.</p></div>
+    <div class="card"><b>Storage Write API needs Java on the launcher</b><p>Beam's <code>STORAGE_WRITE_API</code> writer is a cross-language transform; the machine that submits the job needs a JDK for the expansion service even though the pipeline is Python.</p></div>
+    <div class="card"><b>Beam 2.77 defaults to Prism</b><p>Tests took minutes the first time because the portable Prism runner downloads itself; it is fine afterwards, and the DirectRunner is still available for quick loops.</p></div>
+    <div class="card"><b>Two dead-letter layers</b><p>Pub/Sub's DLQ handles delivery failures; the <code>dead_letter</code> table handles bad data. They answer different questions and both are queryable.</p></div>
+    <div class="card"><b>Window metrics are the cheap spike detector</b><p>A per-minute aggregate table costs almost nothing to query and makes the incident burst visible without touching <code>raw_events</code>.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  Built by Bhavishya Jain · <a href="https://github.com/bhavishyajain545/gcp-data-ai-pipeline">github.com/bhavishyajain545/gcp-data-ai-pipeline</a> · Part of a three-project Google Cloud portfolio (Gemini RAG agent, GKE platform).
+</div></footer>
+</body>
+</html>
