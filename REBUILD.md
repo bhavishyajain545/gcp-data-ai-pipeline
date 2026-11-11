@@ -87,8 +87,9 @@ real 150 s burst, waits for windows to close, runs the BigQuery/Gemini queries l
 ## 6. Tear down (stop all cost)
 
 ```bash
-./deploy.sh stop           # drain the streaming job (check: gcloud dataflow jobs list --region us-central1 --status active)
-./deploy.sh destroy        # terraform destroy: bucket force_destroy, dataset delete_contents_on_destroy, tables, connection, SA, VPC
+./teardown.sh              # drain Dataflow jobs and wait, terraform destroy (bucket force_destroy, dataset
+                           # delete_contents_on_destroy, tables, connection, SA, VPC, scheduled query), leftover report
+./audit-billing.sh         # every section should be empty  (./audit-billing.sh p1 p2 p3 audits several projects)
 # Looker Studio reports are free to keep; delete the report from lookerstudio.google.com if you like.
 ```
 

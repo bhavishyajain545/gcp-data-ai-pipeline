@@ -78,6 +78,10 @@ Local test of the streaming logic without Dataflow: `python pipeline/streaming_p
 
 Dataflow streaming is the only meaningful cost (~₹400-650/day if left running): run it for the demo and `./deploy.sh stop`. Pub/Sub and BigQuery stay in the free tier at this volume; the Gemini calls are bounded by `LIMIT 200` distinct errors and a few dozen daily-summary rows.
 
+```bash
+./teardown.sh        # drain jobs → terraform destroy → report; ./audit-billing.sh lists everything billable
+```
+
 ## Design notes (interview talking points)
 
 - **Streaming vs batch through one transform:** `ParseEvent` is shared by both jobs, so "valid event" has a single definition; the batch job is just a different source.
